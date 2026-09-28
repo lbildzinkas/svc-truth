@@ -106,7 +106,7 @@ Two things keep this usable:
 
 A service does not have to write its errors where launchd expects them. When a job keeps its own log file, pass it with `--log <file>` and the last few lines of that file are shown for every selected job, trimmed like the other tails. A leading `~` expands to the home directory, so `--log ~/Library/Logs/bridge/bridge.log` works from any cwd.
 
-The file is one path for the whole run, read once and shared across the selected jobs. In human output the tail appears in the detail view (`log:` line) and indented under each job's line in a listing; with `--json` every job carries a `log` object. A missing or unreadable file is reported — `(file not found)` / `(file not readable)` in human output, `log.error` in JSON — and never fails the run: `log` is `null` only when no `--log` was given at all.
+The file is one path for the whole run, read once and shared across the selected jobs. In human output the tail appears in the detail view (`log:` line) and indented under each job's line in a listing — or once after the collapse summary when every selected job is a collapsed `loaded-never-ran` job; with `--json` every job carries a `log` object. A missing or unreadable file is reported — `(file not found)` / `(file not readable)` in human output, `log.error` in JSON — and never fails the run: `log` is `null` only when no `--log` was given at all.
 
 ## Exit codes
 

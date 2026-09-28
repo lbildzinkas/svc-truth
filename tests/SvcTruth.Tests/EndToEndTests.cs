@@ -191,6 +191,37 @@ public class EndToEndTests
     }
 
     [Fact]
+    public void ListingMarksContradictedJobOnItsLine()
+    {
+        CommandResult CrashWorld(string fileName, IReadOnlyList<string> arguments, int call)
+        {
+            if (fileName == "launchctl" && arguments is ["print", $"gui/501/{SampleData.BridgeLabel}"])
+            {
+                var runs = call == 1 ? 120 : 124; // second sample taken after the sleep
+                return Ok(SampleData.PrintCrashLooping(SampleData.BridgeLabel, runs, exitCode: 78, plistPath: SampleData.BridgePlistPath));
+            }
+
+            return HealthyWorld(fileName, arguments, call);
+        }
+
+        var files = new Dictionary<string, string>
+        {
+            [SampleData.BridgePlistPath] = SampleData.BridgePlist,
+            [SampleData.BridgeStderrPath] = SampleData.BridgeStderrTail,
+        };
+        var (exit, stdout, _, _, _) = RunApp(["io.github.example", "--doctor", "bridge doctor"], CrashWorld, files);
+
+        Assert.Equal(SvcTruthApp.ExitUnhealthy, exit);
+        var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        var bridgeLine = Assert.Single(lines, l => l.StartsWith(SampleData.BridgeLabel));
+        Assert.Contains("CRASH-LOOPING", bridgeLine);
+        Assert.Contains("CONTRADICTION", bridgeLine);
+        var cacheLine = Assert.Single(lines, l => l.StartsWith(SampleData.CacheLabel));
+        Assert.Contains("HEALTHY", cacheLine);
+        Assert.DoesNotContain("CONTRADICTION", cacheLine);
+    }
+
+    [Fact]
     public void DoctorExitZeroWithHealthyVerdictIsNoContradiction()
     {
         var files = new Dictionary<string, string>

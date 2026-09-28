@@ -28,7 +28,8 @@ public static class ReportWriter
             }
             else
             {
-                writer.WriteLine($"{job.Label}  {JobLine(job)}");
+                var contradiction = job.Doctor?.Contradiction ?? false;
+                writer.WriteLine($"{job.Label}  {JobLine(job)}{(contradiction ? "  CONTRADICTION" : string.Empty)}");
             }
 
             if (!detail)

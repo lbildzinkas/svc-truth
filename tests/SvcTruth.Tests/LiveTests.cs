@@ -40,7 +40,7 @@ public class LiveTests
         foreach (var job in jobs.EnumerateArray())
         {
             var verdict = job.GetProperty("verdict").GetString();
-            Assert.Contains(verdict, new[] { "healthy", "crash-looping", "loaded-never-ran", "exited-failed", "unknown" });
+            Assert.Contains(verdict, new[] { "healthy", "crash-looping", "recovered", "loaded-never-ran", "exited-failed", "unknown" });
         }
     }
 

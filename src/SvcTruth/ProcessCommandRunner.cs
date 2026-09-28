@@ -42,6 +42,7 @@ public sealed class ProcessCommandRunner : ICommandRunner
         try
         {
             process.Start();
+            process.StandardInput.Close();
         }
         catch (Exception)
         {

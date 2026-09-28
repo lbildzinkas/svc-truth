@@ -10,8 +10,13 @@ public sealed class FakeCommandRunner : ICommandRunner
 
     public CommandResult Run(string fileName, IReadOnlyList<string> arguments, TimeSpan timeout)
     {
-        var callForArguments = Invocations.Count(i => i.FileName == fileName && i.Arguments.SequenceEqual(arguments)) + 1;
-        Invocations.Add((fileName, arguments));
+        int callForArguments;
+        lock (Invocations)
+        {
+            callForArguments = Invocations.Count(i => i.FileName == fileName && i.Arguments.SequenceEqual(arguments)) + 1;
+            Invocations.Add((fileName, arguments));
+        }
+
         return Handler(fileName, arguments, callForArguments);
     }
 

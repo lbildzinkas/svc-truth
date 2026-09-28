@@ -89,7 +89,7 @@ Sampling happens only for jobs whose first sample looks suspicious (non-zero las
 
 | Code | Meaning                                                                                     |
 |------|---------------------------------------------------------------------------------------------|
-| 0    | every selected job is healthy or recovered (no contradiction)                                 |
+| 0    | no selected job is failing: healthy, recovered, or loaded-never-ran (no contradiction)        |
 | 2    | at least one selected job is `crash-looping`, `exited-failed`, or contradicted by its doctor |
 | 3    | usage error or read error (unknown verdict, unreadable gui domain, no matching label)        |
 

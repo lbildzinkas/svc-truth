@@ -50,6 +50,9 @@ public sealed record JobReport
     /// <summary>Tail of the stdout log, non-null only when the stderr log is empty.</summary>
     public IReadOnlyList<string>? StdoutTail { get; init; }
 
+    /// <summary>The file named with --log: null without the option; otherwise its tail (or why it could not be read).</summary>
+    public LogFileReport? Log { get; init; }
+
     /// <summary>Restarts per minute measured across the two samples; null unless a rate was measured.</summary>
     public double? RestartRatePerMinute { get; init; }
 
@@ -69,6 +72,19 @@ public sealed record LogPathsReport
     public string? Stdout { get; init; }
 
     public string? Stderr { get; init; }
+}
+
+/// <summary>The extra log file named with --log, shown for every selected job.</summary>
+public sealed record LogFileReport
+{
+    /// <summary>The path actually read (a leading ~ already expanded to the home directory).</summary>
+    public string Path { get; init; } = string.Empty;
+
+    /// <summary>Last lines of the file, trimmed like the other tails; null when it has no content or could not be read.</summary>
+    public IReadOnlyList<string>? Tail { get; init; }
+
+    /// <summary>Why the tail is missing, for example "file not found"; null when the file was read.</summary>
+    public string? Error { get; init; }
 }
 
 public sealed record SummaryReport

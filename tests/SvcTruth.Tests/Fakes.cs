@@ -29,6 +29,9 @@ public sealed class FakeFileSystem(Dictionary<string, string> files) : IFileSyst
 {
     public List<string> ReadPaths { get; } = [];
 
+    /// <summary>Paths that exist but whose tail cannot be read (permissions, for example).</summary>
+    public HashSet<string> UnreadableTailPaths { get; } = [];
+
     public bool FileExists(string path) => files.ContainsKey(path);
 
     public string? TryReadText(string path, int maxBytes)
@@ -46,6 +49,11 @@ public sealed class FakeFileSystem(Dictionary<string, string> files) : IFileSyst
     {
         ReadPaths.Add(path);
         if (!files.TryGetValue(path, out var content))
+        {
+            return null;
+        }
+
+        if (UnreadableTailPaths.Contains(path))
         {
             return null;
         }

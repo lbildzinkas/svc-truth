@@ -12,8 +12,9 @@ public class VerdictEngineTests
         int? pid = 123,
         long? runs = 4,
         int? lastExit = 0,
-        bool neverExited = false) =>
-        new(label, state, pid, runs, lastExit, neverExited);
+        bool neverExited = false,
+        TimeSpan? processUptime = null) =>
+        new(label, state, pid, runs, lastExit, neverExited, processUptime);
 
     [Fact]
     public void RunningWithCleanExitIsHealthy()
@@ -170,6 +171,94 @@ public class VerdictEngineTests
             Sample(runs: 1, state: "spawn scheduled", pid: null, lastExit: null, neverExited: true), null, Options);
 
         Assert.Equal(Verdict.Healthy, result.Verdict);
+    }
+
+    [Fact]
+    public void HighRestartsWhileRunningStablyIsRecovered()
+    {
+        // A job that crash-looped 5400 times but whose process has now been up for 2 minutes has
+        // broken the loop: recovered, with the past restart count in the reason.
+        var result = VerdictEngine.Evaluate(
+            Sample(runs: 5400, lastExit: 78, processUptime: TimeSpan.FromSeconds(120)), null, Options);
+
+        Assert.Equal(Verdict.Recovered, result.Verdict);
+        Assert.Contains("5400 restarts", result.Reason);
+    }
+
+    [Fact]
+    public void FastLoopMidRunIsStillCrashLooping()
+    {
+        // Dies ~3s after each start, restarted every 10s, sampled mid-run: the current process has
+        // only been up 3s, far below the recovery bound, so the threshold rule still fires.
+        var result = VerdictEngine.Evaluate(
+            Sample(runs: 30, lastExit: 78, processUptime: TimeSpan.FromSeconds(3)), null, Options);
+
+        Assert.Equal(Verdict.CrashLooping, result.Verdict);
+    }
+
+    [Fact]
+    public void FastLoopBetweenRunsIsStillCrashLooping()
+    {
+        // The same loop sampled between runs: not running, threshold rule fires.
+        var result = VerdictEngine.Evaluate(
+            Sample(runs: 30, state: "not running", pid: null, lastExit: 78), null, Options);
+
+        Assert.Equal(Verdict.CrashLooping, result.Verdict);
+    }
+
+    [Fact]
+    public void ObservedRiseDuringSamplingBeatsRecovery()
+    {
+        // A run count that rose during the 3s sampling window means restarts are happening right now;
+        // that reading wins even if the (contradictory) uptime says the process is old.
+        var first = Sample(runs: 5400, lastExit: 78, processUptime: TimeSpan.FromSeconds(120));
+        var second = new Resample(Sample(runs: 5404), TimeSpan.FromSeconds(3));
+
+        var result = VerdictEngine.Evaluate(first, second, Options);
+
+        Assert.Equal(Verdict.CrashLooping, result.Verdict);
+    }
+
+    [Fact]
+    public void FastLoopMidRunWithObservedRiseIsStillCrashLooping()
+    {
+        var first = Sample(runs: 30, lastExit: 78, processUptime: TimeSpan.FromSeconds(2));
+        var second = new Resample(Sample(runs: 33), TimeSpan.FromSeconds(3));
+
+        var result = VerdictEngine.Evaluate(first, second, Options);
+
+        Assert.Equal(Verdict.CrashLooping, result.Verdict);
+        Assert.NotNull(result.RestartRatePerMinute);
+    }
+
+    [Fact]
+    public void UnknownUptimeKeepsCrashLooping()
+    {
+        // Cannot prove stability (ps unreadable): the alerting verdict stands.
+        var result = VerdictEngine.Evaluate(
+            Sample(runs: 5400, lastExit: 78, processUptime: null), null, Options);
+
+        Assert.Equal(Verdict.CrashLooping, result.Verdict);
+    }
+
+    [Fact]
+    public void LowRestartsWhileRunningStablyStaysHealthy()
+    {
+        // Below the crash-loop threshold there was never a loop to recover from.
+        var result = VerdictEngine.Evaluate(
+            Sample(runs: 2, lastExit: 78, processUptime: TimeSpan.FromSeconds(120)), null, Options);
+
+        Assert.Equal(Verdict.Healthy, result.Verdict);
+    }
+
+    [Fact]
+    public void CustomRecoveryUptimeIsHonoured()
+    {
+        var options = new VerdictOptions(RecoveryUptime: TimeSpan.FromSeconds(300));
+        var result = VerdictEngine.Evaluate(
+            Sample(runs: 5400, lastExit: 78, processUptime: TimeSpan.FromSeconds(120)), null, options);
+
+        Assert.Equal(Verdict.CrashLooping, result.Verdict);
     }
 
     [Fact]

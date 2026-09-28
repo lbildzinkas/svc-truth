@@ -109,6 +109,21 @@ public static class SvcTruthApp
             label => label,
             label => ToSample(label, listByLabel.GetValueOrDefault(label), firstPrints.GetValueOrDefault(label)));
 
+        // Process uptime (read-only ps) for suspicious running jobs: a process that has been up longer
+        // than launchd's restart throttle has broken the loop and is reported as recovered.
+        foreach (var label in labels)
+        {
+            var sample = firstSamples[label];
+            if (IsSuspicious(sample) && sample.Pid is int pid)
+            {
+                var etime = commandRunner.Run("ps", ["-o", "etime=", "-p", pid.ToString()], LaunchctlTimeout);
+                firstSamples[label] = sample with
+                {
+                    ProcessUptime = etime.ExitCode is 0 && !etime.TimedOut ? EtimeParser.Parse(etime.Stdout) : null,
+                };
+            }
+        }
+
         // Resample only suspicious jobs (non-zero last exit): one shared delay keeps listings fast.
         Dictionary<string, JobSample> secondSamples = [];
         DateTimeOffset secondSampledAt = firstSampledAt;
@@ -376,6 +391,7 @@ public static class SvcTruthApp
     {
         Verdict.Healthy => "healthy",
         Verdict.CrashLooping => "crash-looping",
+        Verdict.Recovered => "recovered",
         Verdict.LoadedNeverRan => "loaded-never-ran",
         Verdict.ExitedFailed => "exited-failed",
         _ => "unknown",
@@ -403,6 +419,7 @@ public static class SvcTruthApp
             Total = jobs.Count,
             Healthy = jobs.Count(j => j.Verdict == "healthy"),
             CrashLooping = jobs.Count(j => j.Verdict == "crash-looping"),
+            Recovered = jobs.Count(j => j.Verdict == "recovered"),
             LoadedNeverRan = jobs.Count(j => j.Verdict == "loaded-never-ran"),
             ExitedFailed = jobs.Count(j => j.Verdict == "exited-failed"),
             Unknown = jobs.Count(j => j.Verdict == "unknown"),

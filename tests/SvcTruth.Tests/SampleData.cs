@@ -86,6 +86,19 @@ public static class SampleData
         "\tdomain = gui/501 [100020]",
         "}");
 
+    public static string PrintRunningFailed(string label, int pid, long runs, int exitCode, string plistPath) => string.Join('\n',
+        $"gui/501/{label} = {{",
+        "\tactive count = 1",
+        $"\tpath = {plistPath}",
+        "\ttype = LaunchAgent",
+        "\tstate = running",
+        $"\tpid = {pid}",
+        $"\truns = {runs}",
+        $"\tlast exit code = {exitCode}",
+        "",
+        "\tdomain = gui/501 [100020]",
+        "}");
+
     public static string PrintKilledBySignal(string label, long runs, int signal) => string.Join('\n',
         $"gui/501/{label} = {{",
         "\tactive count = 0",

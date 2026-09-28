@@ -6,20 +6,38 @@ public enum Verdict
 {
     Healthy,
     CrashLooping,
+    Recovered,
     LoadedNeverRan,
     ExitedFailed,
     Unknown,
 }
 
 /// <summary>Tunable verdict thresholds; the defaults are documented in the README.</summary>
-public sealed record VerdictOptions(int SampleRiseCount = 3, int RunCountThreshold = 10)
+public sealed record VerdictOptions(
+    int SampleRiseCount = 3,
+    int RunCountThreshold = 10,
+    TimeSpan? RecoveryUptime = null)
 {
     /// <summary>Delay between the two samples used to detect a rising run count.</summary>
     public static readonly TimeSpan SampleDelay = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// A running job whose process has been up at least this long after a crash-loop no longer counts as
+    /// crash-looping: launchd throttles restarts to roughly one every 10 seconds, so a process that has
+    /// outlived six throttle windows without dying has broken the loop. It is reported as recovered.
+    /// </summary>
+    public static readonly TimeSpan DefaultRecoveryUptime = TimeSpan.FromSeconds(60);
 }
 
-/// <summary>One observation of a job, fused from <c>launchctl list</c> (always available) and <c>launchctl print</c> (when readable). LastExitStatus follows launchctl's convention: negative means killed by that signal, null means never exited or unknown. RunCount is null when the job's print output is unreadable.</summary>
-public sealed record JobSample(string Label, string? State, int? Pid, long? RunCount, int? LastExitStatus, bool NeverExited);
+/// <summary>One observation of a job, fused from <c>launchctl list</c> (always available) and <c>launchctl print</c> (when readable). LastExitStatus follows launchctl's convention: negative means killed by that signal, null means never exited or unknown. RunCount is null when the job's print output is unreadable. ProcessUptime is how long the current process has been up (from <c>ps -o etime=</c>), null when the job is not running or the uptime is unreadable.</summary>
+public sealed record JobSample(
+    string Label,
+    string? State,
+    int? Pid,
+    long? RunCount,
+    int? LastExitStatus,
+    bool NeverExited,
+    TimeSpan? ProcessUptime = null);
 
 /// <summary>The second observation plus how much time passed between the two samples.</summary>
 public sealed record Resample(JobSample Sample, TimeSpan Elapsed);
@@ -90,6 +108,17 @@ public static class VerdictEngine
 
         if (first.RunCount is not null && first.RunCount >= options.RunCountThreshold)
         {
+            // The loop is in the past when the current process has been up long enough to outlive several
+            // of launchd's restart-throttle windows without dying: report recovery, not an active loop.
+            var recoveryUptime = options.RecoveryUptime ?? VerdictOptions.DefaultRecoveryUptime;
+            if (IsRunning(first) && first.ProcessUptime >= recoveryUptime)
+            {
+                var upSeconds = Math.Round(first.ProcessUptime!.Value.TotalSeconds);
+                return VerdictResult.Of(
+                    Verdict.Recovered,
+                    $"running stably for {upSeconds:0}s after {first.RunCount} restarts; last failed run ended with {SignalNames.Describe(exit)}");
+            }
+
             return VerdictResult.Of(
                 Verdict.CrashLooping,
                 $"run count {first.RunCount} is at or above the threshold {options.RunCountThreshold} with {SignalNames.Describe(exit)}");

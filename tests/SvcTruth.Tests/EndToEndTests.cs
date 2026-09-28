@@ -131,7 +131,7 @@ public class EndToEndTests
         Assert.Equal(SvcTruthApp.ExitUnhealthy, exit);
         using var document = JsonDocument.Parse(stdout);
         var job = document.RootElement.GetProperty("jobs")[0];
-        Assert.False(job.TryGetProperty("stderrTail", out _)); // empty stderr log: omitted
+        Assert.Equal(JsonValueKind.Null, job.GetProperty("stderrTail").ValueKind); // empty stderr log
         var stdoutTail = job.GetProperty("stdoutTail");
         Assert.Equal("listening on 8081", stdoutTail[stdoutTail.GetArrayLength() - 1].GetString());
     }
@@ -221,7 +221,7 @@ public class EndToEndTests
         using var document = JsonDocument.Parse(stdout);
         var doctor = document.RootElement.GetProperty("jobs")[0].GetProperty("doctor");
         Assert.True(doctor.GetProperty("timedOut").GetBoolean());
-        Assert.False(doctor.TryGetProperty("exitCode", out _));
+        Assert.Equal(JsonValueKind.Null, doctor.GetProperty("exitCode").ValueKind); // timed out: exit code unknown
         Assert.False(doctor.GetProperty("contradiction").GetBoolean());
     }
 
@@ -249,8 +249,8 @@ public class EndToEndTests
         using var document = JsonDocument.Parse(stdout);
         var job = document.RootElement.GetProperty("jobs")[0];
         Assert.Equal("unknown", job.GetProperty("verdict").GetString());
-        Assert.False(job.TryGetProperty("state", out _));
-        Assert.False(job.TryGetProperty("runCount", out _));
+        Assert.Equal(JsonValueKind.Null, job.GetProperty("state").ValueKind);
+        Assert.Equal(JsonValueKind.Null, job.GetProperty("runCount").ValueKind);
     }
 
     [Fact]
@@ -280,7 +280,7 @@ public class EndToEndTests
         Assert.Equal("healthy", job.GetProperty("verdict").GetString());
         Assert.Equal("running", job.GetProperty("state").GetString());
         Assert.Equal(4242, job.GetProperty("pid").GetInt32());
-        Assert.False(job.TryGetProperty("runCount", out _)); // print unreadable: run count stays unknown
+        Assert.Equal(JsonValueKind.Null, job.GetProperty("runCount").ValueKind); // print unreadable
         Assert.Contains("launchctl print failed", job.GetProperty("reason").GetString());
         Assert.Empty(clock.Slept); // last exit 0 from the list: nothing suspicious, no sampling
     }
@@ -336,6 +336,139 @@ public class EndToEndTests
         Assert.Equal(-9, job.GetProperty("lastExitCode").GetInt32());
         Assert.Equal("SIGKILL", job.GetProperty("lastExitSignal").GetString());
         Assert.Contains("killed by SIGKILL", job.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void RecoveredJobIsNotCrashLoopingAndExitsZero()
+    {
+        // A job that crash-looped 5400 times, whose process has now been up 5m30s: recovered.
+        CommandResult RecoveredWorld(string fileName, IReadOnlyList<string> arguments, int call)
+        {
+            if (fileName == "launchctl" && arguments is ["print", $"gui/501/{SampleData.BridgeLabel}"])
+            {
+                return Ok(SampleData.PrintRunningFailed(SampleData.BridgeLabel, pid: 4242, runs: 5400, exitCode: 78, plistPath: SampleData.BridgePlistPath));
+            }
+
+            if (fileName == "ps" && arguments[0] == "-o")
+            {
+                return Ok("05:30");
+            }
+
+            return HealthyWorld(fileName, arguments, call);
+        }
+
+        var (exit, stdout, _, runner, clock) = RunApp(
+            [SampleData.BridgeLabel, "--doctor", "bridge doctor", "--json"], RecoveredWorld);
+
+        Assert.Equal(0, exit); // recovered is not unhealthy
+        using var document = JsonDocument.Parse(stdout);
+        var job = document.RootElement.GetProperty("jobs")[0];
+        Assert.Equal("recovered", job.GetProperty("verdict").GetString());
+        Assert.Equal(5400, job.GetProperty("runCount").GetInt32());
+        Assert.Contains("5400 restarts", job.GetProperty("reason").GetString());
+        Assert.False(job.GetProperty("doctor").GetProperty("contradiction").GetBoolean()); // not failing now
+        var summary = document.RootElement.GetProperty("summary");
+        Assert.Equal(1, summary.GetProperty("recovered").GetInt32());
+        Assert.Equal(0, summary.GetProperty("crashLooping").GetInt32());
+        Assert.Single(clock.Slept); // still suspicious: sampled once
+        Assert.Contains(runner.Invocations, i => i.FileName == "ps"); // uptime was read read-only
+    }
+
+    [Fact]
+    public void FastLoopMidRunIsStillCrashLooping()
+    {
+        // Dies ~3s after each start, restarted every 10s, sampled mid-run: uptime 3s is below the
+        // 60s recovery bound, so the threshold rule still reports an active loop.
+        CommandResult FastLoopWorld(string fileName, IReadOnlyList<string> arguments, int call)
+        {
+            if (fileName == "launchctl" && arguments is ["print", $"gui/501/{SampleData.BridgeLabel}"])
+            {
+                return Ok(SampleData.PrintRunningFailed(SampleData.BridgeLabel, pid: 999, runs: 30, exitCode: 78, plistPath: SampleData.BridgePlistPath));
+            }
+
+            if (fileName == "ps" && arguments[0] == "-o")
+            {
+                return Ok("00:03");
+            }
+
+            return HealthyWorld(fileName, arguments, call);
+        }
+
+        var (exit, stdout, _, _, _) = RunApp([SampleData.BridgeLabel, "--json"], FastLoopWorld);
+
+        Assert.Equal(SvcTruthApp.ExitUnhealthy, exit);
+        using var document = JsonDocument.Parse(stdout);
+        var job = document.RootElement.GetProperty("jobs")[0];
+        Assert.Equal("crash-looping", job.GetProperty("verdict").GetString());
+    }
+
+    [Fact]
+    public void FastLoopBetweenRunsIsStillCrashLooping()
+    {
+        // The same loop sampled between runs: not running, no uptime to read, threshold rule fires.
+        CommandResult FastLoopWorld(string fileName, IReadOnlyList<string> arguments, int call)
+        {
+            if (fileName == "launchctl" && arguments is ["print", $"gui/501/{SampleData.BridgeLabel}"])
+            {
+                return Ok(SampleData.PrintCrashLooping(SampleData.BridgeLabel, runs: 30, exitCode: 78, plistPath: SampleData.BridgePlistPath));
+            }
+
+            return HealthyWorld(fileName, arguments, call);
+        }
+
+        var (exit, stdout, _, runner, _) = RunApp([SampleData.BridgeLabel, "--json"], FastLoopWorld);
+
+        Assert.Equal(SvcTruthApp.ExitUnhealthy, exit);
+        using var document = JsonDocument.Parse(stdout);
+        var job = document.RootElement.GetProperty("jobs")[0];
+        Assert.Equal("crash-looping", job.GetProperty("verdict").GetString());
+        Assert.DoesNotContain(runner.Invocations, i => i.FileName == "ps"); // nothing running: no uptime read
+    }
+
+    [Fact]
+    public void EveryDocumentedJsonFieldIsAlwaysEmitted()
+    {
+        // The JSON contract: every documented field is present on every job and the summary, with
+        // null (or false) when empty - never omitted.
+        var (exit, stdout, _, _, _) = RunApp([SampleData.GhostLabel, "--json"], HealthyWorld);
+
+        Assert.Equal(0, exit);
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        foreach (var field in new[]
+                 {
+                     "schemaVersion", "generatedAtUtc", "domain", "selection", "jobs", "summary", "exitCode",
+                 })
+        {
+            Assert.True(root.TryGetProperty(field, out _), $"missing top-level field {field}");
+        }
+
+        var job = root.GetProperty("jobs")[0];
+        foreach (var field in new[]
+                 {
+                     "label", "state", "pid", "runCount", "lastExitCode", "lastExitSignal", "logPaths",
+                     "stderrTail", "stdoutTail", "restartRatePerMinute", "restartIntervalSeconds",
+                     "verdict", "reason", "doctor",
+                 })
+        {
+            Assert.True(job.TryGetProperty(field, out _), $"missing job field {field}");
+        }
+
+        Assert.Equal(JsonValueKind.Null, job.GetProperty("doctor").ValueKind); // no --doctor given
+        Assert.Equal(JsonValueKind.Null, job.GetProperty("lastExitCode").ValueKind); // never exited
+        Assert.Equal(JsonValueKind.Null, job.GetProperty("pid").ValueKind);
+        Assert.Equal(JsonValueKind.Null, job.GetProperty("logPaths").ValueKind); // plist unreadable here
+        Assert.Equal(JsonValueKind.Null, job.GetProperty("stderrTail").ValueKind);
+
+        var summary = root.GetProperty("summary");
+        foreach (var field in new[]
+                 {
+                     "total", "healthy", "crashLooping", "recovered", "loadedNeverRan", "exitedFailed",
+                     "unknown", "contradictions",
+                 })
+        {
+            Assert.True(summary.TryGetProperty(field, out _), $"missing summary field {field}");
+        }
     }
 
     [Fact]

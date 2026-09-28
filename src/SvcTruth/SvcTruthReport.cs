@@ -2,7 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace SvcTruth;
 
-/// <summary>The single JSON object --json prints. Fields are camelCase and stable across patch releases; the schemaVersion field guards breaking changes.</summary>
+/// <summary>The single JSON object --json prints. Fields are camelCase and stable across patch releases; the schemaVersion field guards breaking changes. Every documented field is always emitted — empty values serialize as null (or false for booleans) rather than being omitted.</summary>
 public sealed record SvcTruthReport
 {
     public int SchemaVersion { get; init; } = 1;
@@ -47,7 +47,7 @@ public sealed record JobReport
     /// <summary>Tail of the stderr log (the stdout tail is used when stderr is empty), trimmed to a few lines.</summary>
     public IReadOnlyList<string>? StderrTail { get; init; }
 
-    /// <summary>Tail of the stdout log, only present when the stderr log is empty.</summary>
+    /// <summary>Tail of the stdout log, non-null only when the stderr log is empty.</summary>
     public IReadOnlyList<string>? StdoutTail { get; init; }
 
     /// <summary>Restarts per minute measured across the two samples; null unless a rate was measured.</summary>
@@ -79,6 +79,8 @@ public sealed record SummaryReport
 
     public int CrashLooping { get; init; }
 
+    public int Recovered { get; init; }
+
     public int LoadedNeverRan { get; init; }
 
     public int ExitedFailed { get; init; }
@@ -90,7 +92,6 @@ public sealed record SummaryReport
 
 [JsonSourceGenerationOptions(
     WriteIndented = true,
-    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(SvcTruthReport))]
 internal sealed partial class ReportJsonContext : JsonSerializerContext;

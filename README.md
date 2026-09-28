@@ -14,9 +14,11 @@ It never starts, stops, reloads or edits anything. First version: macOS only (la
 
 - Lists the current user's loaded launchd jobs from the gui domain (`launchctl list`), narrowed by a label prefix or shown as one detailed job for an exact label.
 - Per job, reads `launchctl print gui/<uid>/<label>` and reports: label, state, pid, run count, last exit status (with the signal name when the job died by signal), the stdout and stderr log paths from the job's plist, and the tail of the stderr log (the stdout tail when stderr is empty), trimmed to a few lines.
+- Names an extra log file with `--log <file>`: its tail is shown for every selected job, trimmed like the other tails (a leading `~` expands to the home directory). Useful when a service writes its errors to its own log instead of launchd's stderr path. A missing or unreadable file is reported, never an error that stops the run.
 - Computes a verdict per job (see [verdict rules](#verdict-rules)): `healthy`, `crash-looping`, `recovered`, `loaded-never-ran`, `exited-failed` or `unknown`.
 - Optionally runs a doctor command (`--doctor "<command>"`, through `sh`, 10 s timeout) and reports a contradiction when it exits 0 while the verdict is `crash-looping` or `exited-failed`.
 - Reads the process uptime of suspicious running jobs (`ps -o etime= -p <pid>`, read-only) so a job that has recovered from a crash loop is not reported as crash-looping.
+- Keeps a plain listing readable: `loaded-never-ran` jobs collapse into one summary line (`--all` lists them individually); JSON output and exit codes are never affected by the collapse.
 - Prints short human-readable lines by default, or one stable JSON object with `--json` (see [JSON output](#json-output)).
 
 ## What it does not do
@@ -42,7 +44,7 @@ cd svc-truth
 
 ## Examples
 
-List every loaded job, one short line each:
+List every loaded job, one short line each (loaded-never-ran jobs collapse into one summary line; `--all` lists them individually):
 
 ```sh
 svc-truth
@@ -66,6 +68,12 @@ The agent-shaped call: one job, its own doctor command, machine-readable output:
 svc-truth io.github.example.bridge --doctor "bridge doctor" --json
 ```
 
+Show the tail of a log the service keeps itself (its errors may never reach launchd's stderr path):
+
+```sh
+svc-truth io.github.example.bridge --log ~/Library/Logs/bridge/bridge.log
+```
+
 An agent reads `jobs[].verdict`, `jobs[].doctor.contradiction` and the `exitCode`, and knows — without trusting the service's self-report — whether the supervisor observes a crash loop.
 
 ## Verdict rules
@@ -84,6 +92,21 @@ Evaluated per job, in this order:
 Some system-provided jobs appear in `launchctl list` but cannot be read with `launchctl print` (launchd answers "Could not find service"). For those, the verdict falls back to the list row alone: running → `healthy`, clean last exit → `healthy`, failed last exit → `exited-failed` (run count and log paths stay unknown, and the reason says so). Jetsammed jobs are rescued the same way: their print output parses but carries only a `last exit reason` line, never a last exit code, so the list row's signal status is used instead (a jetsammed job reports `exited-failed` with `lastExitSignal`). Only when neither source yields a usable exit status does the verdict become `unknown`.
 
 Sampling happens only for jobs whose first sample looks suspicious (non-zero last exit status), so a plain listing stays fast: the one shared 3-second delay is paid only when something is actually failing. The process-uptime check (`ps -o etime=`) also runs only for suspicious jobs that are currently running.
+
+## Full listings and Apple system agents
+
+A listing with no label lists every loaded job in the gui domain. On a stock Mac that is dominated by Apple's on-demand agents: well over a hundred sit loaded but have never run, and macOS itself routinely kills and relaunches agents under the `com.apple.` prefix (jetsam pressure, maintenance, idle exit), so their last exit often reads as a failure. That is normal system behaviour, not a real outage — but a naive full scan looks alarming and can exit non-zero for reasons that have nothing to do with the services you care about.
+
+Two things keep this usable:
+
+- In human output, `loaded-never-ran` jobs collapse into one summary line (`N loaded-never-ran job(s) not shown (pass --all to list them)`). Pass `--all` to list them individually. The collapse is presentation only: `--json` always lists every selected job, verdicts are unchanged and failing jobs are never hidden.
+- Agents and scripts that check on specific services should pass a label prefix (or an exact label) so Apple's system agents stay out of the result entirely, for example `svc-truth dev.example` or `svc-truth io.github.example.bridge`.
+
+## Named log files (--log)
+
+A service does not have to write its errors where launchd expects them. When a job keeps its own log file, pass it with `--log <file>` and the last few lines of that file are shown for every selected job, trimmed like the other tails. A leading `~` expands to the home directory, so `--log ~/Library/Logs/bridge/bridge.log` works from any cwd.
+
+The file is one path for the whole run, read once and shared across the selected jobs. In human output the tail appears in the detail view (`log:` line) and indented under each job's line in a listing — or once after the collapse summary when every selected job is a collapsed `loaded-never-ran` job; with `--json` every job carries a `log` object. A missing or unreadable file is reported — `(file not found)` / `(file not readable)` in human output, `log.error` in JSON — and never fails the run: `log` is `null` only when no `--log` was given at all.
 
 ## Exit codes
 
@@ -122,6 +145,7 @@ Per job (`jobs[]`):
 | logPaths                 | object   | `stdout`/`stderr` paths declared in the job's plist, `null` when unknown       |
 | stderrTail               | array    | last lines of the stderr log, trimmed, `null` when unavailable                |
 | stdoutTail               | array    | last lines of the stdout log, non-`null` only when the stderr log is empty    |
+| log                      | object   | the file given with `--log`: `path` (expanded), `tail` (last lines, `null` when absent/unreadable), `error` (`"file not found"`/`"file not readable"`, else `null`); `null` without `--log` |
 | restartRatePerMinute     | number   | restarts per minute, `null` unless measured across the two samples            |
 | restartIntervalSeconds   | number   | average seconds between restarts, `null` unless measured                      |
 | verdict                  | string   | `healthy` \| `crash-looping` \| `recovered` \| `loaded-never-ran` \| `exited-failed` \| `unknown` |
@@ -150,6 +174,7 @@ Example:
       },
       "stderrTail": ["2026-09-28T11:59:50Z bridge: fatal: connection refused (127.0.0.1:8081)"],
       "stdoutTail": null,
+      "log": null,
       "restartRatePerMinute": 6.0,
       "restartIntervalSeconds": 10.0,
       "verdict": "crash-looping",
@@ -175,7 +200,7 @@ Example:
 - `launchctl print gui/<uid>/<label>` per job (state, run count, last exit status, plist path).
 - `ps -o etime= -p <pid>` for the process uptime of suspicious running jobs (the recovered verdict).
 - The job's plist for `StandardOutPath` / `StandardErrorPath` (XML plists; binary plists leave the paths unknown).
-- The log files themselves, read from the end, for the tails.
+- The log files themselves, read from the end, for the tails — including the one file named with `--log`.
 
 All process spawning goes through one command runner that refuses state-changing launchctl subcommands.
 

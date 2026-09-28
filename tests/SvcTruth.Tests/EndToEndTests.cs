@@ -54,14 +54,15 @@ public class EndToEndTests
     private static (int Exit, string Stdout, string Stderr, FakeCommandRunner Runner, FakeClock Clock) RunApp(
         string[] args,
         Func<string, IReadOnlyList<string>, int, CommandResult> handler,
-        Dictionary<string, string>? files = null)
+        Dictionary<string, string>? files = null,
+        string? home = null)
     {
         var runner = new FakeCommandRunner { Handler = handler };
         var fileSystem = new FakeFileSystem(files ?? new Dictionary<string, string>());
         var clock = new FakeClock(Start);
         var stdout = new StringWriter();
         var stderr = new StringWriter();
-        var exit = SvcTruthApp.Run(args, 501, runner, fileSystem, clock, stdout, stderr).GetAwaiter().GetResult();
+        var exit = SvcTruthApp.Run(args, 501, runner, fileSystem, clock, stdout, stderr, home).GetAwaiter().GetResult();
         return (exit, stdout.ToString(), stderr.ToString(), runner, clock);
     }
 
@@ -72,14 +73,106 @@ public class EndToEndTests
 
         Assert.Equal(0, exit);
         Assert.DoesNotContain("svc-truth:", stderr);
-        foreach (var label in new[] { SampleData.BridgeLabel, SampleData.CacheLabel, SampleData.GhostLabel })
+        foreach (var label in new[] { SampleData.BridgeLabel, SampleData.CacheLabel })
         {
             Assert.Contains(label, stdout);
         }
 
         Assert.Contains("HEALTHY", stdout);
-        Assert.Contains("LOADED-NEVER-RAN", stdout);
         Assert.Empty(clock.Slept); // nothing suspicious: no sampling delay
+    }
+
+    [Fact]
+    public void PlainListingCollapsesLoadedNeverRanJobsIntoOneSummaryLine()
+    {
+        var (exit, stdout, _, _, _) = RunApp([], HealthyWorld);
+
+        Assert.Equal(0, exit);
+        Assert.DoesNotContain(SampleData.GhostLabel, stdout); // collapsed, not listed
+        Assert.DoesNotContain("LOADED-NEVER-RAN", stdout); // no per-job line carries the verdict
+        Assert.Contains("1 loaded-never-ran job(s) not shown (pass --all to list them)", stdout);
+    }
+
+    [Fact]
+    public void AllFlagListsLoadedNeverRanJobs()
+    {
+        var (exit, stdout, _, _, _) = RunApp(["--all"], HealthyWorld);
+
+        Assert.Equal(0, exit);
+        var ghostLine = Assert.Single(stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries),
+            l => l.StartsWith(SampleData.GhostLabel));
+        Assert.Contains("LOADED-NEVER-RAN", ghostLine);
+        Assert.DoesNotContain("not shown", stdout); // nothing collapsed
+    }
+
+    [Fact]
+    public void JsonAlwaysListsEveryJobRegardlessOfCollapse()
+    {
+        var (exit, stdout, _, _, _) = RunApp(["--json"], HealthyWorld);
+
+        Assert.Equal(0, exit);
+        using var document = JsonDocument.Parse(stdout);
+        var jobs = document.RootElement.GetProperty("jobs");
+        Assert.Equal(3, jobs.GetArrayLength()); // the collapse is human-output only
+        Assert.Contains(jobs.EnumerateArray(), j => j.GetProperty("label").GetString() == SampleData.GhostLabel);
+        Assert.Equal(1, document.RootElement.GetProperty("summary").GetProperty("loadedNeverRan").GetInt32());
+    }
+
+    [Fact]
+    public void CollapseNeverHidesFailingJobs()
+    {
+        var (exit, stdout, _, _, _) = RunApp([], ExitedFailedWorld);
+
+        Assert.Equal(SvcTruthApp.ExitUnhealthy, exit); // verdicts and exit codes stay truthful
+        var bridgeLine = Assert.Single(stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries),
+            l => l.StartsWith(SampleData.BridgeLabel));
+        Assert.Contains("EXITED-FAILED", bridgeLine);
+        Assert.Contains("1 loaded-never-ran job(s) not shown", stdout);
+    }
+
+    [Fact]
+    public void SingleLoadedNeverRanJobInDetailIsNotCollapsed()
+    {
+        var (exit, stdout, _, _, _) = RunApp([SampleData.GhostLabel], HealthyWorld);
+
+        Assert.Equal(0, exit);
+        Assert.Contains(SampleData.GhostLabel, stdout);
+        Assert.Contains("LOADED-NEVER-RAN", stdout);
+        Assert.DoesNotContain("not shown", stdout);
+    }
+
+    [Fact]
+    public void ListingWhereEveryJobIsLoadedNeverRanCollapsesToTheSummaryLine()
+    {
+        var neverRanList = string.Join('\n',
+            "PID\tStatus\tLabel",
+            $"-\t0\t{SampleData.GhostLabel}",
+            "-\t0\tio.github.example.ghost2");
+        CommandResult NeverRanWorld(string fileName, IReadOnlyList<string> arguments, int call)
+        {
+            if (fileName == "launchctl" && arguments is ["list"])
+            {
+                return Ok(neverRanList);
+            }
+
+            if (fileName == "launchctl" && arguments is ["print", ..] && arguments[1].EndsWith(SampleData.GhostLabel))
+            {
+                return Ok(SampleData.PrintNeverRan(SampleData.GhostLabel));
+            }
+
+            if (fileName == "launchctl" && arguments is ["print", ..])
+            {
+                return Ok(SampleData.PrintNeverRan("io.github.example.ghost2"));
+            }
+
+            return new CommandResult(127, string.Empty, "unexpected command", false, false);
+        }
+
+        var (exit, stdout, _, _, _) = RunApp([], NeverRanWorld);
+
+        Assert.Equal(0, exit); // loaded-never-ran is not failing
+        Assert.DoesNotContain("LOADED-NEVER-RAN", stdout);
+        Assert.Contains("2 loaded-never-ran job(s) not shown (pass --all to list them)", stdout);
     }
 
     [Fact]
@@ -478,7 +571,7 @@ public class EndToEndTests
         foreach (var field in new[]
                  {
                      "label", "state", "pid", "runCount", "lastExitCode", "lastExitSignal", "logPaths",
-                     "stderrTail", "stdoutTail", "restartRatePerMinute", "restartIntervalSeconds",
+                     "stderrTail", "stdoutTail", "log", "restartRatePerMinute", "restartIntervalSeconds",
                      "verdict", "reason", "doctor",
                  })
         {
@@ -486,6 +579,7 @@ public class EndToEndTests
         }
 
         Assert.Equal(JsonValueKind.Null, job.GetProperty("doctor").ValueKind); // no --doctor given
+        Assert.Equal(JsonValueKind.Null, job.GetProperty("log").ValueKind); // no --log given
         Assert.Equal(JsonValueKind.Null, job.GetProperty("lastExitCode").ValueKind); // never exited
         Assert.Equal(JsonValueKind.Null, job.GetProperty("pid").ValueKind);
         Assert.Equal(JsonValueKind.Null, job.GetProperty("logPaths").ValueKind); // plist unreadable here

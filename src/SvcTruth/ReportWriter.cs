@@ -10,15 +10,18 @@ public static class ReportWriter
         return JsonSerializer.Serialize(report, ReportJsonContext.Default.SvcTruthReport);
     }
 
-    /// <summary>Listing (more than one job): one short line per job. Detail (single job): a full block with paths, tails and doctor.</summary>
-    public static void Human(SvcTruthReport report, TextWriter writer)
+    /// <summary>Listing (more than one job): one short line per job. Detail (single job): a full block with paths, tails and doctor.
+    /// In a listing, loaded-never-ran jobs collapse into one summary line unless <paramref name="showAll"/> is set; their verdict never fails the run either way.</summary>
+    public static void Human(SvcTruthReport report, TextWriter writer, bool showAll)
     {
         writer.WriteLine(
             $"domain {report.Domain}: {report.Summary.Total} job(s){(report.Selection is null ? string.Empty : $" matching \"{report.Selection}\"")}");
 
         var detail = report.Jobs.Count == 1;
+        var shownJobs = showAll || detail ? report.Jobs : report.Jobs.Where(j => j.Verdict != "loaded-never-ran").ToList();
+        var collapsed = report.Jobs.Count - shownJobs.Count;
         var indent = detail ? "        " : string.Empty;
-        foreach (var job in report.Jobs)
+        foreach (var job in shownJobs)
         {
             writer.WriteLine();
             if (detail)
@@ -30,6 +33,15 @@ public static class ReportWriter
             {
                 var contradiction = job.Doctor?.Contradiction ?? false;
                 writer.WriteLine($"{job.Label}  {JobLine(job)}{(contradiction ? "  CONTRADICTION" : string.Empty)}");
+                if (job.Log?.Error is { } logError)
+                {
+                    writer.WriteLine($"  log: {job.Log.Path}  ({logError})");
+                }
+
+                foreach (var tailLine in job.Log?.Tail ?? [])
+                {
+                    writer.WriteLine($"  {tailLine}");
+                }
             }
 
             if (!detail)
@@ -69,6 +81,16 @@ public static class ReportWriter
                 }
             }
 
+            if (job.Log is not null)
+            {
+                writer.WriteLine(
+                    $"{indent}log: {job.Log.Path}{(job.Log.Error is null ? string.Empty : $"  ({job.Log.Error})")}");
+                foreach (var tailLine in job.Log.Tail ?? [])
+                {
+                    writer.WriteLine($"{indent}  {tailLine}");
+                }
+            }
+
             if (job.Doctor is not null)
             {
                 var exitText = job.Doctor.TimedOut
@@ -84,6 +106,25 @@ public static class ReportWriter
                 foreach (var tailLine in job.Doctor.StdoutTail ?? [])
                 {
                     writer.WriteLine($"{indent}  {tailLine}");
+                }
+            }
+        }
+
+        if (collapsed > 0)
+        {
+            if (shownJobs.Count > 0)
+            {
+                writer.WriteLine();
+            }
+
+            writer.WriteLine($"… {collapsed} loaded-never-ran job(s) not shown (pass --all to list them)");
+            if (shownJobs.Count == 0 && report.Jobs[0].Log is { } log)
+            {
+                writer.WriteLine(
+                    $"  log: {log.Path}{(log.Error is null ? string.Empty : $"  ({log.Error})")}");
+                foreach (var tailLine in log.Tail ?? [])
+                {
+                    writer.WriteLine($"  {tailLine}");
                 }
             }
         }

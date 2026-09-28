@@ -4,11 +4,16 @@ using SvcTruth.Launchd;
 namespace SvcTruth;
 
 /// <summary>Command-line options. Label is either an exact label (detailed view) or a prefix (filtered listing).</summary>
-public sealed record CliOptions(string? Label = null, string? DoctorCommand = null, bool Json = false)
+public sealed record CliOptions(
+    string? Label = null,
+    string? DoctorCommand = null,
+    string? LogPath = null,
+    bool Json = false,
+    bool All = false)
 {
     public static readonly string Usage =
         """
-        svc-truth [label] [--doctor "<command>"] [--json]
+        svc-truth [label] [--doctor "<command>"] [--log <file>] [--json] [--all]
 
         Read-only truth about the current user's launchd jobs (gui domain): state, run count,
         last exit code, log tails and a crash-loop verdict. Never starts, stops or edits anything.
@@ -17,7 +22,11 @@ public sealed record CliOptions(string? Label = null, string? DoctorCommand = nu
                            omit it to list every loaded job
           --doctor CMD     also run CMD through sh with a 10s timeout for each selected job and flag a
                            contradiction when it exits 0 while launchd shows crash-looping or exited-failed
+          --log FILE       also show the last few lines of FILE for each selected job (a leading ~ expands
+                           to the home directory); a missing or unreadable file is reported, never fatal
           --json           print one stable JSON object (schemaVersion 1) instead of human-readable lines
+          --all            in a human listing, also list loaded-never-ran jobs (they collapse into one
+                           summary line otherwise; JSON always lists every job)
           --help           show this help
           --version        print the version
 
@@ -52,7 +61,8 @@ public static class SvcTruthApp
         IFileSystem fileSystem,
         IClock clock,
         TextWriter stdout,
-        TextWriter stderr)
+        TextWriter stderr,
+        string? homeDirectory = null)
     {
         if (!TryParseArguments(args, out var options, out var parseError))
         {
@@ -102,6 +112,13 @@ public static class SvcTruthApp
 
         var labels = selected.Select(e => e.Label).ToList();
 
+        // The extra log named with --log is one file for the whole run: read it once, share it per job.
+        LogFileReport? namedLog = null;
+        if (options.LogPath is not null)
+        {
+            namedLog = ReadLogFileReport(ExpandHome(options.LogPath, homeDirectory), fileSystem);
+        }
+
         // First sample: launchctl print for every selected job, in parallel, fused with the always-available list row.
         var (firstPrints, firstSampledAt) = await PrintJobsAsync(commandRunner, domain, labels, clock);
         var listByLabel = selected.ToDictionary(e => e.Label);
@@ -150,6 +167,7 @@ public static class SvcTruthApp
                 secondSampledAt - firstSampledAt,
                 verdictOptions,
                 options.DoctorCommand,
+                namedLog,
                 commandRunner,
                 fileSystem));
         }
@@ -162,7 +180,7 @@ public static class SvcTruthApp
         }
         else
         {
-            ReportWriter.Human(report, stdout);
+            ReportWriter.Human(report, stdout, options.All);
         }
 
         return exitCode;
@@ -175,7 +193,9 @@ public static class SvcTruthApp
     {
         string? label = null;
         string? doctor = null;
+        string? logPath = null;
         var json = false;
+        var all = false;
         var wantHelp = false;
         var wantVersion = false;
 
@@ -192,6 +212,26 @@ public static class SvcTruthApp
                     break;
                 case "--json":
                     json = true;
+                    break;
+                case "--all":
+                    all = true;
+                    break;
+                case "--log":
+                    if (i + 1 >= args.Length)
+                    {
+                        options = null;
+                        error = "--log needs a file path, for example --log ~/Library/Logs/bridge/bridge.log";
+                        return false;
+                    }
+
+                    logPath = args[++i];
+                    if (logPath.Length == 0)
+                    {
+                        options = null;
+                        error = "--log needs a non-empty file path";
+                        return false;
+                    }
+
                     break;
                 case "--doctor":
                     if (i + 1 >= args.Length)
@@ -237,7 +277,7 @@ public static class SvcTruthApp
             return true;
         }
 
-        options = new CliOptions(label, doctor, json);
+        options = new CliOptions(label, doctor, logPath, json, all);
         error = string.Empty;
         return true;
     }
@@ -308,6 +348,44 @@ public static class SvcTruthApp
     private static bool IsSuspicious(JobSample sample) =>
         sample.LastExitStatus is not null && sample.LastExitStatus != 0;
 
+    /// <summary>Expands a leading ~ (or a bare ~) to the home directory; anything else is returned verbatim.</summary>
+    internal static string ExpandHome(string path, string? homeDirectory)
+    {
+        var home = homeDirectory ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (path == "~")
+        {
+            return home;
+        }
+
+        if (path.StartsWith("~/", StringComparison.Ordinal))
+        {
+            return home.Length == 0 ? path[2..] : Path.Combine(home, path[2..]);
+        }
+
+        return path;
+    }
+
+    /// <summary>
+    /// Reads the tail of the file named with --log. A missing or unreadable file is reported in the
+    /// result, never an error that stops the run.
+    /// </summary>
+    private static LogFileReport ReadLogFileReport(string path, IFileSystem fileSystem)
+    {
+        var tail = fileSystem.TryReadTailLines(path, TailMaxBytesFromEnd, TailLines, TailMaxLineLength);
+        string? error = null;
+        if (tail is null)
+        {
+            error = fileSystem.FileExists(path) ? "file not readable" : "file not found";
+        }
+
+        return new LogFileReport
+        {
+            Path = path,
+            Tail = tail is { Count: > 0 } ? tail : null,
+            Error = error,
+        };
+    }
+
     private static JobReport BuildJobReport(
         string label,
         JobPrintInfo? print,
@@ -316,6 +394,7 @@ public static class SvcTruthApp
         TimeSpan sampleSpan,
         VerdictOptions verdictOptions,
         string? doctorCommand,
+        LogFileReport? namedLog,
         ICommandRunner commandRunner,
         IFileSystem fileSystem)
     {
@@ -383,6 +462,7 @@ public static class SvcTruthApp
             RestartIntervalSeconds = verdict.RestartIntervalSeconds,
             Verdict = VerdictToString(verdict.Verdict),
             Reason = reason,
+            Log = namedLog,
             Doctor = doctor,
         };
     }

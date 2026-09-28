@@ -15,7 +15,7 @@ namespace SvcTruth.Tests;
 public class RealProcessDoctorTests
 {
     [Fact]
-    public void DoctorRunsThroughRealShAndFiresTheContradiction()
+    public async Task DoctorRunsThroughRealShAndFiresTheContradiction()
     {
         CommandResult CrashWorld(string fileName, IReadOnlyList<string> arguments, int call)
         {
@@ -43,14 +43,14 @@ public class RealProcessDoctorTests
         ICommandRunner runner = new RealShRunner(CrashWorld);
         var stdout = new StringWriter();
         var stderr = new StringWriter();
-        var exit = SvcTruthApp.Run(
+        var exit = await SvcTruthApp.Run(
             [SampleData.BridgeLabel, "--doctor", "echo \"self-report: it's fine\" && exit 0", "--json"],
             uid: 501,
             commandRunner: runner,
             fileSystem: new FakeFileSystem([]),
             clock: new FakeClock(new DateTimeOffset(2026, 9, 28, 12, 0, 0, TimeSpan.Zero)),
             stdout: stdout,
-            stderr: stderr).GetAwaiter().GetResult();
+            stderr: stderr);
 
         Assert.Equal(SvcTruthApp.ExitUnhealthy, exit);
         using var document = JsonDocument.Parse(stdout.ToString());

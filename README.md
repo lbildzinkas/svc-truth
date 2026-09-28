@@ -79,7 +79,7 @@ Evaluated per job, in this order:
 4. **exited-failed** — the last exit status is non-zero (exit code, or killed by signal), the job is not running now, and neither crash-loop condition held.
 5. **healthy** — running (including a running job whose exit status is unavailable), or last exit was clean (status 0), or running now after an earlier failed run that is not looping.
 
-Some system-provided jobs appear in `launchctl list` but cannot be read with `launchctl print` (launchd answers "Could not find service"). For those, the verdict falls back to the list row alone: running → `healthy`, clean last exit → `healthy`, failed last exit → `exited-failed` (run count and log paths stay unknown, and the reason says so). Only when neither source yields a usable exit status does the verdict become `unknown`.
+Some system-provided jobs appear in `launchctl list` but cannot be read with `launchctl print` (launchd answers "Could not find service"). For those, the verdict falls back to the list row alone: running → `healthy`, clean last exit → `healthy`, failed last exit → `exited-failed` (run count and log paths stay unknown, and the reason says so). Jetsammed jobs are rescued the same way: their print output parses but carries only a `last exit reason` line, never a last exit code, so the list row's signal status is used instead (a jetsammed job reports `exited-failed` with `lastExitSignal`). Only when neither source yields a usable exit status does the verdict become `unknown`.
 
 Sampling happens only for jobs whose first sample looks suspicious (non-zero last exit status), so a plain listing stays fast: the one shared 3-second delay is paid only when something is actually failing.
 

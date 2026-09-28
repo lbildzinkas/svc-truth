@@ -147,6 +147,17 @@ public class LogOptionTests
     }
 
     [Fact]
+    public void MissingLogFileIsReportedUnderEachJobInAListing()
+    {
+        var (exit, stdout, stderr) = Run(["io.github.example", "--log", "/no/such/bridge.log"]);
+
+        Assert.Equal(0, exit); // healthy jobs; a missing log never fails the run
+        Assert.DoesNotContain("svc-truth:", stderr);
+        var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, lines.Count(l => l == "  log: /no/such/bridge.log  (file not found)")); // once under each of the two jobs
+    }
+
+    [Fact]
     public void LogNeedsAPath()
     {
         var (exit, _, stderr) = Run([SampleData.BridgeLabel, "--log"]);

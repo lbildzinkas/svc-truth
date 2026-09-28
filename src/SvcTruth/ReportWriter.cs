@@ -33,6 +33,11 @@ public static class ReportWriter
             {
                 var contradiction = job.Doctor?.Contradiction ?? false;
                 writer.WriteLine($"{job.Label}  {JobLine(job)}{(contradiction ? "  CONTRADICTION" : string.Empty)}");
+                if (job.Log?.Error is { } logError)
+                {
+                    writer.WriteLine($"  log: {job.Log.Path}  ({logError})");
+                }
+
                 foreach (var tailLine in job.Log?.Tail ?? [])
                 {
                     writer.WriteLine($"  {tailLine}");

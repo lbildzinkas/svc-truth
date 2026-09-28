@@ -10,24 +10,24 @@ public class EndToEndTests
     private static CommandResult Ok(string stdout) => new(0, stdout, string.Empty, TimedOut: false, FailedToStart: false);
 
     /// <summary>Healthy world: bridge ran twice and exited cleanly, cache runs clean, ghost never ran.</summary>
-    private static CommandResult HealthyWorld(string fileName, string arguments, int call)
+    private static CommandResult HealthyWorld(string fileName, IReadOnlyList<string> arguments, int call)
     {
-        if (fileName == "launchctl" && arguments == "list")
+        if (fileName == "launchctl" && arguments is ["list"])
         {
             return Ok(SampleData.ListOutput);
         }
 
-        if (fileName == "launchctl" && arguments == $"print gui/501/{SampleData.BridgeLabel}")
+        if (fileName == "launchctl" && arguments is ["print", $"gui/501/{SampleData.BridgeLabel}"])
         {
             return Ok(SampleData.PrintCrashLooping(SampleData.BridgeLabel, runs: 2, exitCode: 0, plistPath: SampleData.BridgePlistPath));
         }
 
-        if (fileName == "launchctl" && arguments == $"print gui/501/{SampleData.CacheLabel}")
+        if (fileName == "launchctl" && arguments is ["print", $"gui/501/{SampleData.CacheLabel}"])
         {
             return Ok(SampleData.PrintNeverExitedRunning(SampleData.CacheLabel, pid: 501, plistPath: "/Users/example/Library/LaunchAgents/cache.plist"));
         }
 
-        if (fileName == "launchctl" && arguments == $"print gui/501/{SampleData.GhostLabel}")
+        if (fileName == "launchctl" && arguments is ["print", $"gui/501/{SampleData.GhostLabel}"])
         {
             return Ok(SampleData.PrintNeverRan(SampleData.GhostLabel));
         }
@@ -40,9 +40,9 @@ public class EndToEndTests
         return new CommandResult(127, string.Empty, "unexpected command", false, false);
     }
 
-    private static CommandResult ExitedFailedWorld(string fileName, string arguments, int call)
+    private static CommandResult ExitedFailedWorld(string fileName, IReadOnlyList<string> arguments, int call)
     {
-        if (fileName == "launchctl" && arguments == $"print gui/501/{SampleData.BridgeLabel}")
+        if (fileName == "launchctl" && arguments is ["print", $"gui/501/{SampleData.BridgeLabel}"])
         {
             // runs 2 with exit 78 and no rise across the resample: a one-time failure, not a loop.
             return Ok(SampleData.PrintCrashLooping(SampleData.BridgeLabel, runs: 2, exitCode: 78, plistPath: SampleData.BridgePlistPath));
@@ -53,7 +53,7 @@ public class EndToEndTests
 
     private static (int Exit, string Stdout, string Stderr, FakeCommandRunner Runner, FakeClock Clock) RunApp(
         string[] args,
-        Func<string, string, int, CommandResult> handler,
+        Func<string, IReadOnlyList<string>, int, CommandResult> handler,
         Dictionary<string, string>? files = null)
     {
         var runner = new FakeCommandRunner { Handler = handler };
@@ -139,9 +139,9 @@ public class EndToEndTests
     [Fact]
     public void CrashLoopSamplingWithDoctorContradictionExitsTwo()
     {
-        CommandResult CrashWorld(string fileName, string arguments, int call)
+        CommandResult CrashWorld(string fileName, IReadOnlyList<string> arguments, int call)
         {
-            if (fileName == "launchctl" && arguments == $"print gui/501/{SampleData.BridgeLabel}")
+            if (fileName == "launchctl" && arguments is ["print", $"gui/501/{SampleData.BridgeLabel}"])
             {
                 var runs = call == 1 ? 120 : 124; // second sample taken after the sleep
                 return Ok(SampleData.PrintCrashLooping(SampleData.BridgeLabel, runs, exitCode: 78, plistPath: SampleData.BridgePlistPath));
@@ -186,8 +186,8 @@ public class EndToEndTests
         Assert.Equal(1, summary.GetProperty("contradictions").GetInt32());
         Assert.Equal(2, root.GetProperty("exitCode").GetInt32());
 
-        // The doctor command was run through sh exactly once for the one selected job.
-        Assert.Contains(runner.Invocations, i => i.FileName == "/bin/sh" && i.Arguments == "-c 'bridge doctor'");
+        // The doctor command was run through sh exactly once for the one selected job, as one verbatim argv entry.
+        Assert.Contains(runner.Invocations, i => i.FileName == "/bin/sh" && i.Arguments is ["-c", "bridge doctor"]);
     }
 
     [Fact]
@@ -209,7 +209,7 @@ public class EndToEndTests
     [Fact]
     public void DoctorTimeoutIsReportedWithoutContradiction()
     {
-        Func<string, string, int, CommandResult> TimeoutDoctor(Func<string, string, int, CommandResult> world) =>
+        Func<string, IReadOnlyList<string>, int, CommandResult> TimeoutDoctor(Func<string, IReadOnlyList<string>, int, CommandResult> world) =>
             (fileName, arguments, call) =>
                 fileName == "/bin/sh"
                     ? new CommandResult(null, string.Empty, string.Empty, TimedOut: true, FailedToStart: false)
@@ -228,14 +228,14 @@ public class EndToEndTests
     [Fact]
     public void UnreadablePrintYieldsUnknownAndExitThree()
     {
-        CommandResult BrokenWorld(string fileName, string arguments, int call)
+        CommandResult BrokenWorld(string fileName, IReadOnlyList<string> arguments, int call)
         {
-            if (fileName == "launchctl" && arguments == "list")
+            if (fileName == "launchctl" && arguments is ["list"])
             {
                 return Ok(SampleData.ListOutputNoStatus); // not even the list row has a status
             }
 
-            if (fileName == "launchctl" && arguments.StartsWith("print "))
+            if (fileName == "launchctl" && arguments is ["print", ..])
             {
                 return new CommandResult(1, SampleData.PrintNotFound("x"), "Bad request.", false, false);
             }
@@ -257,14 +257,14 @@ public class EndToEndTests
     public void UnprintableJobFallsBackToListData()
     {
         // Some system-provided jobs cannot be printed; the listing row still says whether they run.
-        CommandResult UnprintableWorld(string fileName, string arguments, int call)
+        CommandResult UnprintableWorld(string fileName, IReadOnlyList<string> arguments, int call)
         {
-            if (fileName == "launchctl" && arguments == "list")
+            if (fileName == "launchctl" && arguments is ["list"])
             {
                 return Ok(SampleData.ListOutputBridgeRunning);
             }
 
-            if (fileName == "launchctl" && arguments.StartsWith("print "))
+            if (fileName == "launchctl" && arguments is ["print", ..])
             {
                 return new CommandResult(1, SampleData.PrintNotFound("x"), "Bad request.", false, false);
             }
@@ -288,9 +288,9 @@ public class EndToEndTests
     [Fact]
     public void UnprintableJobWithFailedExitIsExitedFailedFromListData()
     {
-        CommandResult UnprintableWorld(string fileName, string arguments, int call)
+        CommandResult UnprintableWorld(string fileName, IReadOnlyList<string> arguments, int call)
         {
-            if (fileName == "launchctl" && arguments.StartsWith("print "))
+            if (fileName == "launchctl" && arguments is ["print", ..])
             {
                 return new CommandResult(1, SampleData.PrintNotFound("x"), "Bad request.", false, false);
             }
@@ -310,8 +310,8 @@ public class EndToEndTests
     [Fact]
     public void LaunchctlListFailureIsAReadError()
     {
-        CommandResult NoList(string fileName, string arguments, int call) =>
-            fileName == "launchctl" && arguments == "list"
+        CommandResult NoList(string fileName, IReadOnlyList<string> arguments, int call) =>
+            fileName == "launchctl" && arguments is ["list"]
                 ? new CommandResult(1, string.Empty, "Could not communicate with launchd", false, false)
                 : HealthyWorld(fileName, arguments, call);
 

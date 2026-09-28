@@ -2,21 +2,21 @@ namespace SvcTruth.Tests;
 
 public sealed class FakeCommandRunner : ICommandRunner
 {
-    /// <summary>Maps "fileName arguments" to a handler; each call decrements a per-key counter so tests can serve different outputs for repeated calls.</summary>
-    public Func<string, string, int, CommandResult> Handler { get; set; } =
+    /// <summary>Maps (fileName, arguments) to a handler; each call decrements a per-key counter so tests can serve different outputs for repeated calls.</summary>
+    public Func<string, IReadOnlyList<string>, int, CommandResult> Handler { get; set; } =
         (_, _, _) => new CommandResult(0, string.Empty, string.Empty, false, false);
 
-    public List<(string FileName, string Arguments)> Invocations { get; } = [];
+    public List<(string FileName, IReadOnlyList<string> Arguments)> Invocations { get; } = [];
 
-    public CommandResult Run(string fileName, string arguments, TimeSpan timeout)
+    public CommandResult Run(string fileName, IReadOnlyList<string> arguments, TimeSpan timeout)
     {
-        var callForArguments = Invocations.Count(i => i.FileName == fileName && i.Arguments == arguments) + 1;
+        var callForArguments = Invocations.Count(i => i.FileName == fileName && i.Arguments.SequenceEqual(arguments)) + 1;
         Invocations.Add((fileName, arguments));
         return Handler(fileName, arguments, callForArguments);
     }
 
     /// <summary>Every launchctl invocation svc-truth asked for, for read-only assertions.</summary>
-    public IEnumerable<string> LaunchctlArguments =>
+    public IEnumerable<IReadOnlyList<string>> LaunchctlArguments =>
         Invocations.Where(i => i.FileName == "launchctl").Select(i => i.Arguments);
 }
 

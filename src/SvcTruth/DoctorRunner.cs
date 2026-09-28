@@ -18,9 +18,7 @@ public static class DoctorRunner
 
     public static DoctorReport Run(string command, ICommandRunner runner)
     {
-        // Single-quote the command for sh -c; escape embedded single quotes.
-        var quoted = "'" + command.Replace("'", "'\\''") + "'";
-        var result = runner.Run("/bin/sh", $"-c {quoted}", Timeout);
+        var result = runner.Run("/bin/sh", ["-c", command], Timeout);
 
         var stdoutTail = Trim(result.Stdout);
         var stderrTail = Trim(result.Stderr);

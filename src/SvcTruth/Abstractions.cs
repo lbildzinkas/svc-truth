@@ -1,9 +1,9 @@
 namespace SvcTruth;
 
-/// <summary>Runs an external command with a timeout and captures its output. The seam for all process spawning.</summary>
+/// <summary>Runs an external command with a timeout and captures its output. The seam for all process spawning; each argument is passed to the child process as a single argv entry, verbatim.</summary>
 public interface ICommandRunner
 {
-    CommandResult Run(string fileName, string arguments, TimeSpan timeout);
+    CommandResult Run(string fileName, IReadOnlyList<string> arguments, TimeSpan timeout);
 }
 
 /// <summary>Outcome of one command run. ExitCode is null when the command timed out or failed to start.</summary>

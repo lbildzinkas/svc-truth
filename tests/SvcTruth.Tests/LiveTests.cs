@@ -53,7 +53,7 @@ public class LiveTests
         }
 
         // Discover one real label first, then ask for it exactly.
-        var listOutput = new ProcessCommandRunner().Run("launchctl", "list", TimeSpan.FromSeconds(10));
+        var listOutput = new ProcessCommandRunner().Run("launchctl", ["list"], TimeSpan.FromSeconds(10));
         var entries = SvcTruth.Launchd.LaunchctlListParser.Parse(listOutput.Stdout);
         Assert.NotEmpty(entries);
         var label = entries[0].Label;

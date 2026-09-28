@@ -78,7 +78,7 @@ public static class SvcTruthApp
         var domain = $"gui/{uid}";
         var verdictOptions = new VerdictOptions();
 
-        var listResult = commandRunner.Run("launchctl", "list", LaunchctlTimeout);
+        var listResult = commandRunner.Run("launchctl", ["list"], LaunchctlTimeout);
         if (listResult.FailedToStart || listResult.TimedOut || listResult.ExitCode is not 0)
         {
             stderr.WriteLine("svc-truth: could not read the gui domain with `launchctl list`" +
@@ -254,7 +254,7 @@ public static class SvcTruthApp
             new ParallelOptions { MaxDegreeOfParallelism = MaxParallelPrints },
             (label, _) =>
             {
-                var result = runner.Run("launchctl", $"print {domain}/{label}", LaunchctlTimeout);
+                var result = runner.Run("launchctl", ["print", $"{domain}/{label}"], LaunchctlTimeout);
                 results[label] = result.ExitCode is 0 && !result.TimedOut
                     ? LaunchctlPrintParser.Parse(result.Stdout)
                     : null;

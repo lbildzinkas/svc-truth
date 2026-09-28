@@ -17,20 +17,23 @@ public sealed class ProcessCommandRunner : ICommandRunner
         "remove", "restart", "submit", "suspend", "resume",
     ];
 
-    public CommandResult Run(string fileName, string arguments, TimeSpan timeout)
+    public CommandResult Run(string fileName, IReadOnlyList<string> arguments, TimeSpan timeout)
     {
         AssertReadOnlyLaunchctl(fileName, arguments);
 
         var startInfo = new ProcessStartInfo
         {
             FileName = fileName,
-            Arguments = arguments,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             RedirectStandardInput = true,
             CreateNoWindow = true,
         };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
 
         using var process = new Process { StartInfo = startInfo };
         var stdoutBuilder = new StringBuilder();
@@ -85,7 +88,7 @@ public sealed class ProcessCommandRunner : ICommandRunner
     }
 
     /// <summary>Throws when asked to run a launchctl invocation that mutates state.</summary>
-    public static void AssertReadOnlyLaunchctl(string fileName, string arguments)
+    public static void AssertReadOnlyLaunchctl(string fileName, IReadOnlyList<string> arguments)
     {
         var name = Path.GetFileName(fileName);
         if (!string.Equals(name, "launchctl", StringComparison.OrdinalIgnoreCase))
@@ -93,11 +96,11 @@ public sealed class ProcessCommandRunner : ICommandRunner
             return;
         }
 
-        var firstToken = (arguments.Trim().Split(' ', 2).FirstOrDefault() ?? string.Empty).Trim();
-        if (MutatingLaunchctlVerbs.Contains(firstToken, StringComparer.Ordinal))
+        var verb = arguments.FirstOrDefault() ?? string.Empty;
+        if (MutatingLaunchctlVerbs.Contains(verb, StringComparer.Ordinal))
         {
             throw new InvalidOperationException(
-                $"svc-truth is read-only and refuses to run the launchctl subcommand '{firstToken}'.");
+                $"svc-truth is read-only and refuses to run the launchctl subcommand '{verb}'.");
         }
     }
 }

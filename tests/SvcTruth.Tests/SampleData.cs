@@ -99,6 +99,22 @@ public static class SampleData
         "\t}",
         "}");
 
+    /// <summary>
+    /// Live-observed shape of a jetsammed job: the print output parses fine but carries only a
+    /// "last exit reason" line, never a "last exit code" line.
+    /// </summary>
+    public static string PrintJetsammed(string label, long runs) => string.Join('\n',
+        $"gui/501/{label} = {{",
+        "\tactive count = 0",
+        "\tpath = /System/Library/LaunchAgents/" + label + ".plist",
+        "\ttype = LaunchAgent",
+        "\tstate = not running",
+        $"\truns = {runs}",
+        "\tlast exit reason = jetsam: active limit, 4096 pages",
+        "",
+        "\tdomain = gui/501 [100020]",
+        "}");
+
     public static string PrintNeverRan(string label) => string.Join('\n',
         $"gui/501/{label} = {{",
         "\tactive count = 0",
@@ -116,6 +132,13 @@ public static class SampleData
         "\tlast exit code = (never exited)",
         $"\tpath = {plistPath}",
         "}");
+
+    /// <summary>A gui-domain listing where the bridge row was killed by a signal (negative status).</summary>
+    public static readonly string ListOutputBridgeSignalKilled = string.Join('\n',
+        "PID\tStatus\tLabel",
+        $"-\t-9\t{BridgeLabel}",
+        $"501\t0\t{CacheLabel}",
+        $"-\t0\t{GhostLabel}");
 
     public static string PrintNotFound(string label) => string.Join('\n',
         "Bad request.",

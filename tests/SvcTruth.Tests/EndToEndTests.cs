@@ -308,6 +308,37 @@ public class EndToEndTests
     }
 
     [Fact]
+    public void JetsammedJobPrintsWithoutExitCodeFallsBackToListRowSignal()
+    {
+        // Live-observed shape: a jetsammed job's print output parses fine but carries only a
+        // "last exit reason" line, never "last exit code"; the list row still shows the -9 signal.
+        CommandResult JetsamWorld(string fileName, IReadOnlyList<string> arguments, int call)
+        {
+            if (fileName == "launchctl" && arguments is ["list"])
+            {
+                return Ok(SampleData.ListOutputBridgeSignalKilled);
+            }
+
+            if (fileName == "launchctl" && arguments is ["print", $"gui/501/{SampleData.BridgeLabel}"])
+            {
+                return Ok(SampleData.PrintJetsammed(SampleData.BridgeLabel, runs: 3));
+            }
+
+            return HealthyWorld(fileName, arguments, call);
+        }
+
+        var (exit, stdout, _, _, _) = RunApp([SampleData.BridgeLabel, "--json"], JetsamWorld);
+
+        Assert.Equal(SvcTruthApp.ExitUnhealthy, exit);
+        using var document = JsonDocument.Parse(stdout);
+        var job = document.RootElement.GetProperty("jobs")[0];
+        Assert.Equal("exited-failed", job.GetProperty("verdict").GetString());
+        Assert.Equal(-9, job.GetProperty("lastExitCode").GetInt32());
+        Assert.Equal("SIGKILL", job.GetProperty("lastExitSignal").GetString());
+        Assert.Contains("killed by SIGKILL", job.GetProperty("reason").GetString());
+    }
+
+    [Fact]
     public void LaunchctlListFailureIsAReadError()
     {
         CommandResult NoList(string fileName, IReadOnlyList<string> arguments, int call) =>

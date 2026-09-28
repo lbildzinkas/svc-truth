@@ -266,18 +266,29 @@ public static class SvcTruthApp
     /// <summary>
     /// Fuses the always-available list row (pid, last exit status) with the print fields when the print is
     /// readable. Some system-provided jobs cannot be printed; for those the list row still carries the
-    /// essentials, so the verdict degrades gracefully instead of collapsing to unknown.
+    /// essentials, so the verdict degrades gracefully instead of collapsing to unknown. Jetsammed jobs'
+    /// print output parses but carries only a "last exit reason" line, never a last exit code, so the
+    /// list row's status is kept as the fallback there too - only when neither source yields a usable
+    /// exit status does the verdict become unknown.
     /// </summary>
-    private static JobSample ToSample(string label, ListEntry? listEntry, JobPrintInfo? print) =>
-        print is not null
-            ? new JobSample(label, print.State, print.Pid, print.Runs, print.LastExitCode, print.NeverExited)
-            : new JobSample(
+    private static JobSample ToSample(string label, ListEntry? listEntry, JobPrintInfo? print)
+    {
+        if (print is null)
+        {
+            return new JobSample(
                 label,
                 listEntry?.Pid is not null ? "running" : null,
                 listEntry?.Pid,
                 RunCount: null,
                 listEntry?.LastExitStatus,
                 NeverExited: false);
+        }
+
+        var lastExit = print.LastExitCode is null && !print.NeverExited
+            ? listEntry?.LastExitStatus
+            : print.LastExitCode;
+        return new JobSample(label, print.State, print.Pid, print.Runs, lastExit, print.NeverExited);
+    }
 
     private static bool IsSuspicious(JobSample sample) =>
         sample.LastExitStatus is not null && sample.LastExitStatus != 0;

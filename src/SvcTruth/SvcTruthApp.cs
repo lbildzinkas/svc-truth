@@ -22,7 +22,7 @@ public sealed record CliOptions(string? Label = null, string? DoctorCommand = nu
           --version        print the version
 
         Exit codes:
-          0  every selected job is healthy
+          0  no selected job is failing: healthy, recovered, or loaded-never-ran
           2  at least one selected job is crash-looping, exited-failed, or contradicted by its doctor
           3  usage error or read error (launchd unreadable, no match, unknown verdict)
         """;

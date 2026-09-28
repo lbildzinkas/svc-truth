@@ -118,6 +118,15 @@ public static class ReportWriter
             }
 
             writer.WriteLine($"… {collapsed} loaded-never-ran job(s) not shown (pass --all to list them)");
+            if (shownJobs.Count == 0 && report.Jobs[0].Log is { } log)
+            {
+                writer.WriteLine(
+                    $"  log: {log.Path}{(log.Error is null ? string.Empty : $"  ({log.Error})")}");
+                foreach (var tailLine in log.Tail ?? [])
+                {
+                    writer.WriteLine($"  {tailLine}");
+                }
+            }
         }
     }
 

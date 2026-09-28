@@ -14,6 +14,27 @@ public class LogOptionTests
     private const string OwnLogPath = "/Users/example/Library/Logs/bridge/bridge.log";
     private const string OwnLogTail = "2026-09-28T11:59:51Z bridge: fatal: connection refused (127.0.0.1:8081)";
 
+    /// <summary>Two loaded-never-ran jobs: loaded but neither has ever run.</summary>
+    private static CommandResult NeverRanWorld(string fileName, IReadOnlyList<string> arguments, int call)
+    {
+        if (fileName == "launchctl" && arguments is ["list"])
+        {
+            return Ok(string.Join('\n',
+                "PID\tStatus\tLabel",
+                $"-\t0\t{SampleData.GhostLabel}",
+                "-\t0\tio.github.example.ghost2"));
+        }
+
+        if (fileName == "launchctl" && arguments is ["print", ..])
+        {
+            return Ok(SampleData.PrintNeverRan(arguments[1].EndsWith(SampleData.GhostLabel)
+                ? SampleData.GhostLabel
+                : "io.github.example.ghost2"));
+        }
+
+        return new CommandResult(127, string.Empty, "unexpected command", false, false);
+    }
+
     private static CommandResult Ok(string stdout) => new(0, stdout, string.Empty, TimedOut: false, FailedToStart: false);
 
     /// <summary>Two healthy jobs: bridge ran twice and exited cleanly, cache is running.</summary>
@@ -44,12 +65,13 @@ public class LogOptionTests
         string[] args,
         Dictionary<string, string>? files = null,
         FakeFileSystem? fileSystem = null,
-        string? home = null)
+        string? home = null,
+        Func<string, IReadOnlyList<string>, int, CommandResult>? world = null)
     {
         var fs = fileSystem ?? new FakeFileSystem(files ?? []);
         var stdout = new StringWriter();
         var stderr = new StringWriter();
-        var exit = SvcTruthApp.Run(args, 501, new FakeCommandRunner { Handler = World }, fs,
+        var exit = SvcTruthApp.Run(args, 501, new FakeCommandRunner { Handler = world ?? World }, fs,
             new FakeClock(new DateTimeOffset(2026, 9, 28, 12, 0, 0, TimeSpan.Zero)), stdout, stderr, home).GetAwaiter().GetResult();
         return (exit, stdout.ToString(), stderr.ToString());
     }
@@ -155,6 +177,29 @@ public class LogOptionTests
         Assert.DoesNotContain("svc-truth:", stderr);
         var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
         Assert.Equal(2, lines.Count(l => l == "  log: /no/such/bridge.log  (file not found)")); // once under each of the two jobs
+    }
+
+    [Fact]
+    public void MissingLogFileIsReportedWhenEveryJobIsCollapsedInAListing()
+    {
+        var (exit, stdout, stderr) = Run(["io.github.example", "--log", "/no/such/bridge.log"], world: NeverRanWorld);
+
+        Assert.Equal(0, exit); // loaded-never-ran jobs are healthy; a missing log never fails the run
+        Assert.DoesNotContain("svc-truth:", stderr);
+        Assert.Contains("2 loaded-never-ran job(s) not shown (pass --all to list them)", stdout);
+        Assert.Contains("  log: /no/such/bridge.log  (file not found)", stdout); // not lost to the collapse
+    }
+
+    [Fact]
+    public void LogTailAppearsWhenEveryJobIsCollapsedInAListing()
+    {
+        var files = new Dictionary<string, string> { [OwnLogPath] = $"{OwnLogTail}\n" };
+        var (exit, stdout, _) = Run(["io.github.example", "--log", OwnLogPath], files, world: NeverRanWorld);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("2 loaded-never-ran job(s) not shown (pass --all to list them)", stdout);
+        Assert.Contains($"  log: {OwnLogPath}", stdout);
+        Assert.Contains($"  {OwnLogTail}", stdout); // the named file's tail is not lost to the collapse
     }
 
     [Fact]
